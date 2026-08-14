@@ -8,6 +8,8 @@
     "node": ">=22"
   },
   "scripts": {
+    "local": "node --env-file-if-exists=.env src/local.mjs",
+    "watch": "node --env-file-if-exists=.env src/local.mjs --watch",
     "test": "node --test \"test/**/*.test.mjs\"",
     "validate": "sam validate --lint"
   },

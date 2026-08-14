@@ -122,52 +122,90 @@ Two messages are sent, both only when `AlertEmail` is set:
 
 A failing SNS publish is logged but never masks the reboot outcome.
 
-## Local development
+## Run it locally
+
+Settings live in a **`.env` file at the repo root**. Node 20.6+ reads it
+natively via `--env-file`, so there is no `dotenv` dependency and the deployed
+function still ships zero production dependencies. `.env` is gitignored;
+`.env.example` is committed and documents every variable.
 
 ```bash
-npm install     # dev-only: AWS SDK clients for local runs
-npm test        # node:test, no network needed
+cp .env.example .env      # then edit WEBSITE_URL and INSTANCE_NAME
+npm install               # dev-only: AWS SDK clients
+npm run local             # one check, dry-run
+```
+
+`src/local.mjs` is the runner. It invokes the **real handler**, so what you see
+locally is what runs in Lambda — the same retry loop, cooldown logic and log
+events.
+
+**It is dry-run by default:** the HTTP check really happens, but reboot, SNS
+and SSM calls are printed instead of made, and no AWS credentials are needed.
+
+```
+$ npm run local
+dry-run: AWS calls are printed, not made (pass --reboot to go live)
+
+09:41:02 attempt 1/4 HTTP 503 233ms
+09:41:17 attempt 2/4 HTTP 503 34ms
+09:41:32 attempt 3/4 HTTP 503 34ms
+09:41:47 attempt 4/4 HTTP 503 45ms
+09:41:47 DOWN https://example.com after 4 attempt(s) - #1: HTTP 503, ...
+         [dry-run] would reboot Lightsail instance "YourInstanceName"
+```
+
+Flags override `.env` for one run, which is the quick way to test a config
+before committing to it:
+
+```bash
+npm run local -- --url https://example.com --retries 1 --sleep 2
+npm run local -- --json          # raw JSON lines, exactly as CloudWatch sees them
+npm run local -- --watch         # keep checking on the CHECK_EVERY_MINUTES interval
+npm run local -- --help
+npm start                        # same thing, if you are already inside src/
+```
+
+Exit codes are `0` site up, `1` site down, `2` configuration or AWS error — so
+`npm run local` works in a shell pipeline too.
+
+To exercise the real AWS calls, add credentials (`AWS_REGION` / `AWS_PROFILE`
+in `.env`) and pass `--reboot`. **This reboots the instance for real** when the
+site is down:
+
+```bash
+npm run local -- --reboot
+```
+
+Fill in `COOLDOWN_PARAMETER_NAME` and `ALERT_TOPIC_ARN` (from the `sam deploy`
+outputs) to also exercise the cooldown and the email alert. Left empty, the
+cooldown is skipped and no alert is sent.
+
+Other useful commands:
+
+```bash
+npm test                  # node:test, no network or credentials needed
 sam validate --lint
+sam build && sam local invoke UptimeFunction --env-vars env.json   # in a Lambda container
 ```
 
 The function has **no production dependencies** — `@aws-sdk/client-lightsail`,
 `@aws-sdk/client-sns` and `@aws-sdk/client-ssm` are provided by the Node.js
-Lambda runtime and are listed as devDependencies only so tests and local
-invokes work. They are imported lazily, so the unit tests exercise the full
-decision flow without the SDK or the network.
-
-Invoke it locally against real AWS credentials:
-
-```bash
-cat > env.json <<'JSON'
-{
-  "UptimeFunction": {
-    "WEBSITE_URL": "https://example.com",
-    "INSTANCE_NAME": "YourInstanceName",
-    "RETRY_COUNT": "3",
-    "RETRY_SLEEP_SECONDS": "15",
-    "REQUEST_TIMEOUT_SECONDS": "10",
-    "COOLDOWN_MINUTES": "15",
-    "COOLDOWN_PARAMETER_NAME": "",
-    "ALERT_TOPIC_ARN": ""
-  }
-}
-JSON
-
-sam build && sam local invoke UptimeFunction --env-vars env.json
-```
-
-With `COOLDOWN_PARAMETER_NAME` empty the cooldown is skipped and no SSM calls
-are made — but a genuinely down site **will** reboot the real instance.
+Lambda runtime and are listed as devDependencies in the root `package.json`
+only so local runs and tests work (Node resolves them upward from `src/`).
+They are imported lazily, so the unit tests exercise the full decision flow
+without the SDK or the network, and `sam build` packages no `node_modules`.
 
 ## Layout
 
 ```
+.env.example    every setting, documented; copy to .env
 src/
   app.mjs       handler + decision flow (all AWS calls injectable)
   monitor.mjs   HTTP check, retry loop, cooldown maths — pure, no AWS
   config.mjs    environment parsing and validation
   aws.mjs       Lightsail / SNS / SSM wrappers, lazily imported
+  local.mjs     local CLI runner (not used by the deployed handler)
+  package.json  function manifest: no production dependencies
 test/           node:test unit tests
 template.yaml   SAM template
 ```
