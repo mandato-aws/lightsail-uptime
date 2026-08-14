@@ -1,0 +1,12 @@
+node_modules/
+package-lock.json
+.aws-sam/
+
+# Local settings. .env.example is committed, .env is never.
+.env
+.env.*
+!.env.example
+env.json
+
+*.log
+.DS_Store
