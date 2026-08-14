@@ -120,7 +120,31 @@ Two messages are sent, both only when `AlertEmail` is set:
   wrong instance name, throttling). The function then fails the invocation so
   the error shows up in Lambda metrics.
 
+The reboot alert says `(cooldown NOT recorded)` in its subject when the
+timestamp could not be written — see below.
+
 A failing SNS publish is logged but never masks the reboot outcome.
+
+## When Parameter Store misbehaves
+
+The cooldown is a guard against reboot loops, not a gate on recovery, so both
+SSM failure modes degrade the guard rather than the recovery:
+
+- **Read fails** — logged as `cooldown_read_failed`, and the run proceeds as if
+  the instance had never been rebooted. An SSM outage therefore cannot leave a
+  down site unrecovered.
+- **Write fails after a successful reboot** — logged as `cooldown_write_failed`
+  and reported as `cooldownRecorded: false`, but the invocation still succeeds,
+  because the corrective action did work. The alert carries an explicit warning
+  that the next failed check can reboot again before the window has elapsed.
+
+Alarm on either event if you want to know the guard is degraded:
+
+```bash
+aws logs filter-log-events \
+  --log-group-name /aws/lambda/lightsail-uptime-uptime-monitor \
+  --filter-pattern '"cooldown_write_failed"'
+```
 
 ## Run it locally
 
@@ -214,7 +238,8 @@ template.yaml   SAM template
 
 Every run emits JSON lines to CloudWatch: `check_attempt`, `site_up`,
 `site_down`, `reboot_triggered`, `reboot_skipped_cooldown`, `reboot_failed`,
-`alert_published`, `alert_failed`. To find reboots:
+`cooldown_read_failed`, `cooldown_write_failed`, `alert_published`,
+`alert_failed`. To find reboots:
 
 ```bash
 aws logs filter-log-events \

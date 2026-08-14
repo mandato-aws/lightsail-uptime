@@ -58,7 +58,21 @@ export function createHandler(deps = {}) {
       detail: failureDetail
     });
 
-    const lastRebootMs = await readLastReboot(config.cooldownParameterName);
+    // Fail open: the cooldown is a guard against reboot loops, not a gate on
+    // recovery. If the state cannot be read, the site is still down and the
+    // instance still needs rebooting, so proceed as if it had never rebooted.
+    let lastRebootMs = 0;
+    try {
+      lastRebootMs = await readLastReboot(config.cooldownParameterName);
+    } catch (err) {
+      logger({
+        event: 'cooldown_read_failed',
+        parameterName: config.cooldownParameterName,
+        error: String(err?.message ?? err),
+        effect: 'proceeding as if the instance had never been rebooted'
+      });
+    }
+
     const nowMs = now();
     if (isCoolingDown({ lastRebootMs, nowMs, cooldownMs: config.cooldownMs })) {
       const remainingSeconds = Math.ceil((lastRebootMs + config.cooldownMs - nowMs) / 1000);
@@ -105,12 +119,36 @@ export function createHandler(deps = {}) {
     }
 
     const rebootedAt = now();
-    await writeLastReboot(config.cooldownParameterName, rebootedAt);
-    logger({ event: 'reboot_triggered', instanceName: config.instanceName, url: config.url });
+
+    // The reboot already happened, so a failure to record it must not fail the
+    // invocation. It does degrade the loop guard, which the alert calls out.
+    let cooldownRecorded = true;
+    let cooldownError = null;
+    try {
+      await writeLastReboot(config.cooldownParameterName, rebootedAt);
+    } catch (err) {
+      cooldownRecorded = false;
+      cooldownError = String(err?.message ?? err);
+      logger({
+        event: 'cooldown_write_failed',
+        parameterName: config.cooldownParameterName,
+        error: cooldownError,
+        effect: 'the next failed check may reboot again before the cooldown has elapsed'
+      });
+    }
+
+    logger({
+      event: 'reboot_triggered',
+      instanceName: config.instanceName,
+      url: config.url,
+      cooldownRecorded
+    });
 
     await safePublish(publishAlert, logger, {
       topicArn: config.alertTopicArn,
-      subject: `[Uptime] Rebooted ${config.instanceName} - ${config.url} is down`,
+      subject: cooldownRecorded
+        ? `[Uptime] Rebooted ${config.instanceName} - ${config.url} is down`
+        : `[Uptime] Rebooted ${config.instanceName} (cooldown NOT recorded) - ${config.url} is down`,
       message: [
         `The website ${config.url} failed ${attempts.length} consecutive checks.`,
         `A reboot of Lightsail instance "${config.instanceName}" has been requested.`,
@@ -119,7 +157,15 @@ export function createHandler(deps = {}) {
         `Rebooted at: ${new Date(rebootedAt).toISOString()}`,
         `Attempts (${attempts.length}): ${failureDetail}`,
         '',
-        `No further reboot will be attempted for ${config.cooldownMs / 60000} minute(s).`
+        cooldownRecorded
+          ? `No further reboot will be attempted for ${config.cooldownMs / 60000} minute(s).`
+          : [
+              'WARNING: the reboot timestamp could NOT be written to Parameter Store',
+              `(${config.cooldownParameterName}): ${cooldownError}`,
+              '',
+              'The cooldown is therefore NOT in effect: the next failed check can',
+              'reboot the instance again while it is still coming back up.'
+            ].join('\n')
       ].join('\n')
     });
 
@@ -128,7 +174,8 @@ export function createHandler(deps = {}) {
       action: 'rebooted',
       url: config.url,
       instanceName: config.instanceName,
-      attempts: attempts.length
+      attempts: attempts.length,
+      cooldownRecorded
     };
   };
 }
