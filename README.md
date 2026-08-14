@@ -6,7 +6,7 @@ times, and when every attempt fails it calls `lightsail:RebootInstance` on the
 Lightsail instance you name. Optionally it emails you through SNS when a reboot
 happens.
 
-Node.js 24 Lambda + EventBridge schedule, deployed with AWS SAM.
+Node.js 22 Lambda + EventBridge schedule, deployed with AWS SAM.
 
 ## How a run works
 
@@ -95,7 +95,7 @@ click the confirm link.** Changing the address later means confirming again.
 
 | Resource | Notes |
 | --- | --- |
-| Lambda function `<stack>-uptime-monitor` | Node.js 24, arm64, 256 MB |
+| Lambda function `<stack>-uptime-monitor` | Node.js 22, arm64, 256 MB |
 | EventBridge schedule | `rate(CheckEveryMinutes minutes)` |
 | IAM role | `lightsail:RebootInstance` (account+region scoped), `ssm:GetParameter`/`PutParameter` on this stack's parameter, `sns:Publish` on this stack's topic |
 | SSM parameter `/lightsail-uptime/<stack>/last-reboot` | Epoch-ms timestamp backing the cooldown |
