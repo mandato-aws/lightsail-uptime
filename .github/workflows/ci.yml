@@ -1,9 +1,16 @@
 name: CI
 
+# Automatic runs are disabled for now: the only active trigger is manual
+# dispatch from the Actions tab. To re-enable, uncomment the two blocks below.
+#
+# They are deliberately not `push: branches: ['**']` — that plus `pull_request`
+# built every PR commit twice. Limiting push to the default branch and letting
+# pull_request cover everything else gives one run per commit.
 on:
-  push:
-    branches: ['**']
-  pull_request:
+  workflow_dispatch:
+  # push:
+  #   branches: [main]
+  # pull_request:
 
 jobs:
   test:
