@@ -1,0 +1,213 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Serverless uptime monitor: checks a website on a schedule and reboots a
+  Lightsail instance when it stays down, with optional SNS email alerts.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Required
+        Parameters:
+          - WebsiteUrl
+          - InstanceName
+      - Label:
+          default: Optional
+        Parameters:
+          - AlertEmail
+          - CheckEveryMinutes
+          - RetryCount
+          - RetrySleepSeconds
+          - RequestTimeoutSeconds
+          - CooldownMinutes
+          - FunctionTimeoutSeconds
+          - LogRetentionDays
+
+Parameters:
+  WebsiteUrl:
+    Type: String
+    Description: URL to monitor, e.g. https://example.com
+    AllowedPattern: ^https?://.+
+    ConstraintDescription: Must start with http:// or https://
+
+  InstanceName:
+    Type: String
+    Description: Name of the Lightsail instance to reboot, e.g. YourInstanceName
+    MinLength: 1
+
+  AlertEmail:
+    Type: String
+    Description: >
+      Optional email address for SNS alerts, e.g. name@example.com. Leave empty
+      to disable alerting. The address must confirm the subscription email AWS
+      sends after deployment.
+    Default: ''
+    AllowedPattern: ^$|^[^@\s]+@[^@\s]+\.[^@\s]+$
+    ConstraintDescription: Must be empty or a valid email address
+
+  CheckEveryMinutes:
+    Type: Number
+    Description: How often to check the website, in minutes
+    Default: 5
+    MinValue: 1
+    MaxValue: 1440
+
+  RetryCount:
+    Type: Number
+    Description: >
+      Number of retries after the first failed check. The instance is rebooted
+      only after 1 + RetryCount consecutive failures.
+    Default: 3
+    MinValue: 0
+    MaxValue: 20
+
+  RetrySleepSeconds:
+    Type: Number
+    Description: Seconds to sleep between attempts
+    Default: 15
+    MinValue: 0
+    MaxValue: 300
+
+  RequestTimeoutSeconds:
+    Type: Number
+    Description: Per-request HTTP timeout in seconds; a slower response counts as down
+    Default: 10
+    MinValue: 1
+    MaxValue: 300
+
+  CooldownMinutes:
+    Type: Number
+    Description: >
+      Minimum minutes between two reboots. Prevents a reboot loop while the
+      instance is still coming back up. Set to 0 to disable.
+    Default: 15
+    MinValue: 0
+    MaxValue: 1440
+
+  FunctionTimeoutSeconds:
+    Type: Number
+    Description: >
+      Lambda timeout. Must exceed
+      (RetryCount + 1) * RequestTimeoutSeconds + RetryCount * RetrySleepSeconds.
+    Default: 300
+    MinValue: 30
+    MaxValue: 900
+
+  LogRetentionDays:
+    Type: Number
+    Description: CloudWatch Logs retention for the function
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, '']]
+  ChecksEveryMinute: !Equals [!Ref CheckEveryMinutes, 1]
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    Architectures: [arm64]
+    MemorySize: 256
+
+Resources:
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
+    Properties:
+      DisplayName: !Sub '${AWS::StackName} uptime alerts'
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  # Holds the epoch-milliseconds timestamp of the last reboot, used for the
+  # cooldown check. Note: a stack update resets this value to 0.
+  CooldownParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub '/lightsail-uptime/${AWS::StackName}/last-reboot'
+      Description: !Sub 'Epoch ms of the last reboot triggered for ${InstanceName}'
+      Type: String
+      Value: '0'
+
+  UptimeFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-uptime-monitor'
+      RetentionInDays: !Ref LogRetentionDays
+
+  UptimeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-uptime-monitor'
+      Description: !Sub 'Checks ${WebsiteUrl} and reboots ${InstanceName} when it is down'
+      CodeUri: src/
+      Handler: app.handler
+      Timeout: !Ref FunctionTimeoutSeconds
+      LoggingConfig:
+        LogGroup: !Ref UptimeFunctionLogGroup
+      Environment:
+        Variables:
+          WEBSITE_URL: !Ref WebsiteUrl
+          INSTANCE_NAME: !Ref InstanceName
+          RETRY_COUNT: !Ref RetryCount
+          RETRY_SLEEP_SECONDS: !Ref RetrySleepSeconds
+          REQUEST_TIMEOUT_SECONDS: !Ref RequestTimeoutSeconds
+          COOLDOWN_MINUTES: !Ref CooldownMinutes
+          COOLDOWN_PARAMETER_NAME: !Ref CooldownParameter
+          ALERT_TOPIC_ARN: !If [HasAlertEmail, !Ref AlertTopic, '']
+      Policies:
+        - Statement:
+            # Lightsail RebootInstance does not support resource-level
+            # permissions by instance name, so the ARN is scoped by
+            # account and region with a wildcard instance id.
+            - Effect: Allow
+              Action: lightsail:RebootInstance
+              Resource: !Sub 'arn:${AWS::Partition}:lightsail:${AWS::Region}:${AWS::AccountId}:Instance/*'
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:PutParameter
+              Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${CooldownParameter}'
+            - !If
+              - HasAlertEmail
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref AlertTopic
+              - !Ref AWS::NoValue
+      Events:
+        Schedule:
+          Type: Schedule
+          Properties:
+            Name: !Sub '${AWS::StackName}-uptime-schedule'
+            Description: !Sub 'Uptime check for ${WebsiteUrl}'
+            Schedule: !If
+              - ChecksEveryMinute
+              - rate(1 minute)
+              - !Sub 'rate(${CheckEveryMinutes} minutes)'
+            Enabled: true
+
+Outputs:
+  FunctionName:
+    Description: Name of the uptime monitor function
+    Value: !Ref UptimeFunction
+
+  FunctionArn:
+    Description: ARN of the uptime monitor function
+    Value: !GetAtt UptimeFunction.Arn
+
+  ScheduleExpression:
+    Description: How often the website is checked
+    Value: !If
+      - ChecksEveryMinute
+      - rate(1 minute)
+      - !Sub 'rate(${CheckEveryMinutes} minutes)'
+
+  CooldownParameterName:
+    Description: SSM parameter holding the last reboot timestamp (epoch ms)
+    Value: !Ref CooldownParameter
+
+  AlertTopicArn:
+    Condition: HasAlertEmail
+    Description: SNS topic used for alerts; confirm the subscription email to receive them
+    Value: !Ref AlertTopic

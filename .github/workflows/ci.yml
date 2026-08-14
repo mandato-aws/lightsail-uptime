@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install dev dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run tests
+        run: npm test
+
+  validate:
+    name: Validate SAM template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install AWS SAM CLI
+        run: pip install --upgrade aws-sam-cli
+
+      - name: sam validate --lint
+        run: sam validate --lint --region us-east-1
+
+      - name: sam build
+        run: sam build

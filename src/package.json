@@ -1,0 +1,9 @@
+{
+  "name": "lightsail-uptime-function",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Lambda function source. The AWS SDK v3 clients are provided by the Node.js Lambda runtime, so there are no production dependencies to bundle.",
+  "type": "module",
+  "main": "app.mjs",
+  "dependencies": {}
+}

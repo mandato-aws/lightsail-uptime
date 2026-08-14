@@ -1,0 +1,6 @@
+node_modules/
+package-lock.json
+.aws-sam/
+env.json
+*.log
+.DS_Store

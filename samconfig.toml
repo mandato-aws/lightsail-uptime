@@ -1,0 +1,38 @@
+version = 0.1
+
+# Edit the parameter_overrides below (at minimum WebsiteUrl and InstanceName),
+# then run `sam build && sam deploy`. Values set here are what `sam deploy`
+# uses without --guided.
+
+[default.global.parameters]
+stack_name = "lightsail-uptime"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+region = "us-east-1"
+parameter_overrides = [
+  "WebsiteUrl=https://example.com",
+  "InstanceName=YourInstanceName",
+  "AlertEmail=",
+  "CheckEveryMinutes=5",
+  "RetryCount=3",
+  "RetrySleepSeconds=15",
+  "RequestTimeoutSeconds=10",
+  "CooldownMinutes=15",
+  "FunctionTimeoutSeconds=300",
+]
+
+[default.sync.parameters]
+watch = false
+
+[default.local_invoke.parameters]
+env_vars = "env.json"
