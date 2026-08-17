@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "deploy-dci": "sam deploy --region us-east-1 --parameter-overrides AlertEmail=angelo@mandato.com WebsiteUrl=\"https://www.dcimotorsports.com/wp-signin/\" InstanceName=main-site-01",
     "local": "node --env-file-if-exists=.env src/local.mjs",
     "watch": "node --env-file-if-exists=.env src/local.mjs --watch",
     "test": "node --test \"test/**/*.test.mjs\"",
